@@ -1,0 +1,317 @@
+####ayasxla
+
+####2020.05.23
+
+####该脚本为第一次处理chipseq的流程
+
+###该数据为MEF和ESC细胞 两种H1.。。。修饰的数据
+###数据下载后 分为CHIP&MNase
+
+wd@wd:~/sxl/luofang/01chip/01rawdata/01$ pwd
+/home/wd/sxl/luofang/01chip/01rawdata/01
+
+############# 1 ################
+跑01.QC.sh
+
+wd@wd:~/sxl/luofang/01chip/01rawdata/01$ cat 01.QC.sh 
+sh bbduk.sh > bbduk.out 2>&1   && \
+sh trimmomatic_PE.sh > trimmomatic_PE.out 2>&1
+
+01.QC.sh 调用bbduk和trimmomatic_PE
+
+#bbduk.sh
+wd@wd:~/sxl/luofang/01chip/01rawdata/01$ cat bbduk.sh 
+ls */*.fq.gz |while read id
+do
+  sample_name=${id%%/*}
+  /home/wd/xinyan/Software/bbmap/bbduk.sh in=$id out=${sample_name}/${sample_name}_35bp.fq.gz ref=/home/wd/xinyan/Software/bbmap/resources/adapters.fa ktrim=r k=23 mink=11 hdist=1 minlen=35 tpe tbo
+done
+
+#trimmomatic_PE.sh PE为双端测序 SE为单端测序 这个命名虽然是双端测序的 但是其实里面的文件是单端测序的 
+wd@wd:~/sxl/luofang/01chip/01rawdata/01$ cat trimmomatic_PE.sh 
+trimmomatic=/home/wd/xinyan/Software/Trimmomatic-0.38/trimmomatic-0.38.jar
+ls */*_35bp.fq.gz |while read id
+do
+  sample_name=${id%%/*}
+  java -jar $trimmomatic SE -phred33 $id  ${sample_name}/${sample_name}_35bp_paired.fq.gz  LEADING:3 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:35
+done
+
+
+
+############# 2 ################
+#s01.QC-bowtie-samtools-remove.sh 
+s01.QC-bowtie-samtools-remove.sh 调用 02.bowtie-samtools.sh 和 03.remove_chrM_dup.sh
+wd@wd:~/sxl/luofang/01chip/01rawdata/01$ cat s01.QC-bowtie-samtools-remove.sh 
+sh 02.bowtie-samtools.sh > 02.bowtie-samtools.out 2>&1    && \
+sh 03.remove_chrM_dup.sh > 03.remove_chrM_dup.out  2>&1 
+
+###02.bowtie-samtools.sh 
+wd@wd:~/sxl/luofang/01chip/01rawdata/01$ cat 02.bowtie-samtools.sh 
+# This script will run bowtie2 alignment and samtools (view/sort...)
+
+#此处Index需要根据物种替换
+#BowtieIndex=/home/wd/xinyan/Germline/Species/Homo_sapiens/Index/Ensembl/Bowtie2Index/Homo_sapiens.GRCh38.Ensembl.genome
+BowtieIndex=/home/wd/xinyan/Germline/Species/Mouse/Index/Ensembl/Bowtie2Index/Mus_musculus.GRCm38.Ensembl.genome
+
+ls */*_35bp_paired.fq.gz |while read id
+do
+  sample=${id%%/*}
+  bowtie2 -q --phred33 --very-sensitive --end-to-end -p 4 --reorder -x $BowtieIndex -U $id -S ${sample}/${sample}.sam 1>$sample/${sample}.align.log 2>&1
+  samtools view -@ 6 -bhS -q 35 $sample/${sample}.sam -o $sample/${sample}.unique.bam
+  samtools sort -@ 6 $sample/${sample}.unique.bam -o $sample/${sample}.unique.sorted.bam
+  samtools flagstat $sample/${sample}.unique.sorted.bam 1>$sample/${sample}.mapping.log 2>&1
+  samtools index -@ 6 $sample/${sample}.unique.sorted.bam
+  samtools idxstats $sample/${sample}.unique.sorted.bam > $sample/${sample}.unique.sorted.mitochondrial.stats
+  java -jar /home/wd/xinyan/Software/picard.jar EstimateLibraryComplexity I=$sample/${sample}.unique.sorted.bam O=$sample/${sample}.unique.sorted.bam_est_lib_complex_metrics.txt
+
+  rm ${sample}/${sample}.unique.bam
+
+  echo "$id is done"
+done
+
+#### 03.remove_chrM_dup.sh 
+wd@wd:~/sxl/luofang/01chip/01rawdata/01$ cat 03.remove_chrM_dup.sh 
+# This script is to use samtools to remove chrMT
+# view mitochondrial.stats and duplicate
+
+ls */*.sam |while read id
+do
+  sample=${id%%/*}
+  
+  samtools view -h $sample/${sample}.unique.sorted.bam |grep -v 'MT' | samtools view -bS -o $sample/${sample}.final.bam
+  
+  java -jar /home/wd/xinyan/Software/picard.jar EstimateLibraryComplexity I=$sample/${sample}.final.bam O=$sample/${sample}.final.bam_est_lib_complex_metrics.txt
+
+  java -jar /home/wd/xinyan/Software/picard.jar MarkDuplicates I=$sample/${sample}.final.bam O=$sample/${sample}.final.dedup.bam M=$sample/${sample}.final.marked_dup_metrics.txt
+  
+  samtools index -@ 6 $sample/${sample}.final.dedup.bam
+
+  echo "$sample is done"
+done
+
+
+
+到此 01文件夹中有的文件为
+wd@wd:~/sxl/luofang/01chip/01rawdata/01$ ls -l ChIP_ESC/
+total 33045512
+-rw-rw-r-- 1 wd wd  4117562594 3月  31 22:17 ChIP_ESC_35bp.fq.gz
+-rw-rw-r-- 1 wd wd  3716545087 3月  31 22:50 ChIP_ESC_35bp_paired.fq.gz
+-rw-rw-r-- 1 wd wd         222 4月   1 14:40 ChIP_ESC.align.log
+-rw-rw-r-- 1 wd wd  1510922118 4月   1 17:04 ChIP_ESC.final.bam
+-rw-rw-r-- 1 wd wd         769 4月   1 17:05 ChIP_ESC.final.bam_est_lib_complex_metrics.txt
+-rw-rw-r-- 1 wd wd  1558255523 4月   1 17:12 ChIP_ESC.final.dedup.bam
+-rw-rw-r-- 1 wd wd     2433168 4月   1 17:12 ChIP_ESC.final.dedup.bam.bai
+-rw-rw-r-- 1 wd wd        1400 4月   1 17:12 ChIP_ESC.final.marked_dup_metrics.txt
+-rw-rw-r-- 1 wd wd  3781408496 3月  31 14:24 ChIP_ESC.fq.gz
+-rw-rw-r-- 1 wd wd         389 4月   1 14:45 ChIP_ESC.mapping.log
+-rw-rw-r-- 1 wd wd 17638035671 4月   1 14:40 ChIP_ESC.sam
+-rw-rw-r-- 1 wd wd  1510941893 4月   1 14:45 ChIP_ESC.unique.sorted.bam
+-rw-rw-r-- 1 wd wd     2420872 4月   1 14:46 ChIP_ESC.unique.sorted.bam.bai
+-rw-rw-r-- 1 wd wd         785 4月   1 14:47 ChIP_ESC.unique.sorted.bam_est_lib_complex_metrics.txt
+-rw-rw-r-- 1 wd wd        1482 4月   1 14:46 ChIP_ESC.unique.sorted.mitochondrial.stats
+
+
+
+###拿到bam文件之后，因为是用的Ensembl的基因组，染色体编号没有chr
+###所以要加上，并且把非常见的染色体的序列去掉
+###在bam_chr 里面跑do_addChr_rmotherChr_Sorted_BamtoBed.sh
+###需要把01/下的*.final.dedup.bam 文件 复制到这一步的文件夹bam_chr 中,同时将do_addChr_rmotherChr_Sorted_BamtoBed.sh
+脚本复制进去，运行脚本
+***************
+****注意****：
+此处需要将CHIP文件和MNase文件分别处理，因为后续在calling peak的时候 需要将两者分开，一个作为Input 一个作为需要处理的文件 
+需要单独处理
+
+
+cp 01/*.final.dedup.bam ../Bam_chr/Input/
+
+wd@wd:~/sxl/luofang/01chip/01rawdata/Bam_Chr/Input$ cat do_addChr_rmOtherChr_Sorted_BamtoBed.sh 
+ls *.bam |while read id
+do
+  samp=${id%.final.dedup.bam*}
+  # add chr in header (only in chr1-22 X Y MT)
+  nohup samtools view -@ 8 -h $id | sed -e '/^@SQ/s/SN\:/SN\:chr/' -e '/^[^@]/s/\t/\tchr/2' | grep -v 'chrKI' | grep -v 'chrGL'| grep -v 'chrJH' | samtools view -@ 8 -bS - > ${samp}.chr.bam  && \
+        samtools sort -@ 8 -n ${samp}.chr.bam -o ${samp}.chr.sortRead.bam && \
+        bamToBed -i ${samp}.chr.sortRead.bam  > ${samp}.chr.sortRead.bed  && \
+        cat ${samp}.chr.sortRead.bed |grep -v WARNING > ${samp}.final.bed  &
+done
+
+*******注意********
+这一步的代码中，单端or双端 小鼠or人 区别很大 
+如果是双端 bamTobed 需要加上bedpe
+小鼠和人的基因组不一样需要删除的基因组也不太一样 
+
+如果是人的
+这一步得到的结果为 Input文件夹
+wd@wd:~/sxl/luofang/01chip/01rawdata/Bam_Chr/Input$ ls -l
+total 18858660
+-rw-rw-r-- 1 wd wd        541 4月   2 16:17 do_addChr_rmOtherChr_Sorted_BamtoBed.sh
+-rw-rw-r-- 1 wd wd 1185263099 4月   2 18:49 MNase_E13.5_embryos_d_MEF.chr.bam
+-rw-rw-r-- 1 wd wd 1290535012 4月   2 18:50 MNase_E13.5_embryos_d_MEF.chr.sortRead.bam
+-rw-rw-r-- 1 wd wd 1063006351 4月   2 18:51 MNase_E13.5_embryos_d_MEF.chr.sortRead.bed
+-rw-rw-r-- 1 wd wd 1063006351 4月   2 18:51 MNase_E13.5_embryos_d_MEF.final.bed
+-rw-rw-r-- 1 wd wd 1198438490 4月   2 16:18 MNase_E13.5_embryos_d_MEF.final.dedup.bam
+-rw-rw-r-- 1 wd wd 2617666072 4月   2 18:51 MNase_ESC.chr.bam
+-rw-rw-r-- 1 wd wd 3013709223 4月   2 18:54 MNase_ESC.chr.sortRead.bam
+-rw-rw-r-- 1 wd wd 2614946831 4月   2 18:56 MNase_ESC.chr.sortRead.bed
+-rw-rw-r-- 1 wd wd 2614946831 4月   2 18:56 MNase_ESC.final.bed
+-rw-rw-r-- 1 wd wd 2649682576 4月   2 16:18 MNase_ESC.final.dedup.bam
+
+拿到chr.bam 文件之后，切换文件夹到macs2peaks/BAMPE/文件夹下做peak calling
+*****注意*****这里师兄说需要看原文中描述是narrow peak还是broad peak 或者看看文章中有没有提到peakcalling的参数
+我看了文章中，没有看到描述中是broad还是narrow 
+师兄说去macs2的官网，找chip的参数 用那个就行 conda环境切换为py2
+同时提到 mac2的github中有组蛋白修饰的参数找narrow的那个
+
+source activate py2
+wd@wd:~/sxl/luofang/01chip/01rawdata/macs2peaks/BAMPE$ cat do_macs2_ATAC_BAMPE.sh 
+ls ../../Bam_Chr/*.chr.bam |while read id   ###chip
+do
+  samp=${id##*/}
+  input=../../Bam_Chr/Input/MNase_${samp#*_}  ###Input
+  samp=${samp%.bam*}
+  echo $samp
+  echo $id
+  echo $input
+  nohup macs2 callpeak --verbose 3 -t $id -c $input -n ${samp}peak -g mm -f BAM -B -q 0.01 --nomodel --shift 37 --extsize 73  > ${samp}.rr &
+
+done
+
+这一步跑完的文件夹中的文件为
+wd@wd:~/sxl/luofang/01chip/01rawdata/macs2peaks/BAMPE$ ls -l
+total 6691620
+-rw-rw-r-- 1 wd wd 1689825866 4月   3 15:47 ChIP_E13.5_embryos_d_MEF.chrpeak_control_lambda.bdg
+-rw-rw-r-- 1 wd wd   10418335 4月   3 15:47 ChIP_E13.5_embryos_d_MEF.chrpeak_peaks.narrowPeak
+-rw-rw-r-- 1 wd wd   11439528 4月   3 15:47 ChIP_E13.5_embryos_d_MEF.chrpeak_peaks.xls   ****
+-rw-rw-r-- 1 wd wd    7899025 4月   3 15:47 ChIP_E13.5_embryos_d_MEF.chrpeak_summits.bed
+-rw-rw-r-- 1 wd wd  509108369 4月   3 15:47 ChIP_E13.5_embryos_d_MEF.chrpeak_treat_pileup.bdg
+-rw-rw-r-- 1 wd wd       5112 4月   3 15:47 ChIP_E13.5_embryos_d_MEF.chr.rr
+-rw-rw-r-- 1 wd wd 2904733799 4月   3 15:55 ChIP_ESC.chrpeak_control_lambda.bdg
+-rw-rw-r-- 1 wd wd   27737317 4月   3 15:55 ChIP_ESC.chrpeak_peaks.narrowPeak
+-rw-rw-r-- 1 wd wd   31134560 4月   3 15:55 ChIP_ESC.chrpeak_peaks.xls  ****
+-rw-rw-r-- 1 wd wd   19690533 4月   3 15:55 ChIP_ESC.chrpeak_summits.bed
+-rw-rw-r-- 1 wd wd 1640173228 4月   3 15:55 ChIP_ESC.chrpeak_treat_pileup.bdg
+-rw-rw-r-- 1 wd wd       7468 4月   3 15:55 ChIP_ESC.chr.rr
+-rw-rw-r-- 1 wd wd        313 4月   3 15:39 do_macs2_ATAC_BAMPE.sh
+
+师兄让查看一下peak数
+wd@wd:~/sxl/luofang/01chip/01rawdata/macs2peaks/BAMPE$ wc -l *_peaks.xls
+  103971 ChIP_E13.5_embryos_d_MEF.chrpeak_peaks.xls
+  322912 ChIP_ESC.chrpeak_peaks.xls
+  426883 total
+
+这里我们查看了原文 跟原文中的peak数量级接近 
+
+后面师兄让对这些peak做一个注释 
+在文件夹/home/wd/sxl/luofang/01chip/01rawdata/macs2peaks/anno_samp_peak下面
+将narrowPeak复制到anno文件夹下
+wd@wd:~/sxl/luofang/01chip/01rawdata/macs2peaks/BAMPE$ ls *narrowPeak
+ChIP_E13.5_embryos_d_MEF.chrpeak_peaks.narrowPeak  ChIP_ESC.chrpeak_peaks.narrowPeak
+
+###do_homer_annotationPeak.sh
+wd@wd:~/sxl/luofang/01chip/01rawdata/macs2peaks/anno_samp_peak$ cat do_homer_annotationPeak.sh 
+ls *narrowPeak |while read id
+do
+  samp=${id%.narrowPeak}
+  nohup annotatePeaks.pl $id mm10 -size given > ${samp}.anno.bed 2>Anno.log/${samp}.anno.log &
+done
+
+
+###此处如果是human mm10 改为hg38
+得到的bed文件就是注释得到的结果
+这些区域就是这个修饰富集的地方
+基因注释的意思就是看这附近有什么基因，一个peak对应一个基因，可以根据距离TSS的位置来筛选下，然后和SSC里的DEG取交集 或其他的分析
+
+对于距离TSS上下游多少 主要看这个修饰结合在哪 如果不知道的话就默认是1000
+
+
+后面绘制IGV图
+
+2020.04.07
+这里面有有一个scale的过程
+一般都是查看final.bed文件， 然后把每个文件都缩放到一样的数目
+如果A样本18Mreads B样本22Mreads，要把他们标准化到一个水平，就都归一化到20M
+18*（20/18）=20 这里的20/18就是scale factor
+wd@wd:~/sxl/luofang/01chip/01rawdata/Bdg_Bigwig$ wc -l ../Bam_Chr/*final.bed
+   9369759 ../Bam_Chr/ChIP_E13.5_embryos_d_MEF.final.bed
+  32536939 ../Bam_Chr/ChIP_ESC.final.bed
+  41906698 total
+wd@wd:~/sxl/luofang/01chip/01rawdata/Bdg_Bigwig$ cat unique_read.txt 
+2.134527        ChIP_E13.5_embryos_d_MEF.final.bed
+0.614686        ChIP_ESC.final.bed
+此处就是一个多一点 factor就小一点 一个少一点 factor就大一点
+
+
+##do_genomeCoverageBed_BdgToBW_ATAC_1.sh
+wd@wd:~/sxl/luofang/01chip/01rawdata/Bdg_Bigwig$ cat do_genomeCoverageBed_BdgToBW_ATAC_1.sh 
+# This script is to run genomeCoverageBed and transform bam file to bdg file
+
+#对chr.bam进行处理
+cat unique_read.txt |while read line
+do
+  scale=`echo $line | awk -F ' ' '{print $1}' ` 
+  samp=`echo $line |awk -F ' ' '{print $2}'`
+  samp=${samp%.final*}
+
+   echo $samp
+   echo $scale
+   echo "../Bam_Chr/${samp}.chr.bam"
+  
+  nohup genomeCoverageBed -ibam ../Bam_Chr/${samp}.chr.bam  -scale $scale -bg > ${samp}.chr.bdg  && \
+        sort -k1,1 -k2,2n ${samp}.chr.bdg | grep -v chrJH  > ${samp}.chr.sort.bdg  && \
+        bedGraphToBigWig ${samp}.chr.sort.bdg mm10.chrom.sizes ${samp}.bw  && \
+        /home/wd/xinyan/Software/IGV-cli/IGVTools/igvtools toTDF ${samp}.chr.bdg ${samp}.chr.bdg.tdf mm10 > ${samp}.toTDF.log 2>&1 && \
+  echo "$samp is done" &
+
+done
+
+wd@wd:~/sxl/luofang/01chip/01rawdata/Bdg_Bigwig$ ls -l
+total 3984816
+-rw-rw-r-- 1 wd wd   79251970 4月   7 19:11 ChIP_E13.5_embryos_d_MEF.bw
+-rw-rw-r-- 1 wd wd  382327923 4月   7 19:10 ChIP_E13.5_embryos_d_MEF.chr.bdg
+-rw-rw-r-- 1 wd wd   52006680 4月   7 19:14 ChIP_E13.5_embryos_d_MEF.chr.bdg.tdf
+-rw-rw-r-- 1 wd wd  382327923 4月   7 19:10 ChIP_E13.5_embryos_d_MEF.chr.sort.bdg
+-rw-rw-r-- 1 wd wd       8731 4月   7 19:14 ChIP_E13.5_embryos_d_MEF.toTDF.log
+-rw-rw-r-- 1 wd wd  234740646 4月   7 19:14 ChIP_ESC.bw
+-rw-rw-r-- 1 wd wd 1402589250 4月   7 19:12 ChIP_ESC.chr.bdg
+-rw-rw-r-- 1 wd wd  144539604 4月   7 19:19 ChIP_ESC.chr.bdg.tdf
+-rw-rw-r-- 1 wd wd 1402589250 4月   7 19:12 ChIP_ESC.chr.sort.bdg
+-rw-rw-r-- 1 wd wd       8692 4月   7 19:19 ChIP_ESC.toTDF.log
+-rw-rw-r-- 1 wd wd        735 4月   7 18:59 do_genomeCoverageBed_BdgToBW_ATAC_1.sh
+-rw-rw-r-- 1 wd wd       1405 4月   7 19:09 mm10.chrom.sizes
+-rw-rw-r-- 1 wd wd         72 4月   7 18:54 unique_read.txt
+
+运行得到的bw文件 就可以用来画IGV图了 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
