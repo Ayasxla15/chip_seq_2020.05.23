@@ -122,6 +122,10 @@ total 33045512
 此处需要将CHIP文件和MNase文件分别处理，因为后续在calling peak的时候 需要将两者分开，一个作为Input 一个作为需要处理的文件 
 需要单独处理
 
+cp 1.rawdata/*/*/*final.dedup.bam Bam_Chr/
+cd Bam_Chr
+mv H3K9me2_Epiblast_E6.25_Input.final.dedup.bam  Input/
+
 
 cp 01/*.final.dedup.bam ../Bam_chr/Input/
 
